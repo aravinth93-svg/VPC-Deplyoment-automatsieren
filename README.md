@@ -1,12 +1,15 @@
-# VPC-Deployment automatisieren
+# Quiz-App Deployment automatisieren
 
-Aufgabe 1 aus [`tomschiffmann-teaching/03-draft-quiz-app/001-tasks/01-VPC-deplyoment-automatsieren.md`](https://github.com/tomschiffmann-teaching/03-draft-quiz-app/blob/main/001-tasks/01-VPC-deplyoment-auromatisieren.md):
+**Aufgabe 1** (VPC) + **Aufgabe 2** (ECR + Docker Push, 2026-05-06) aus [`tomschiffmann-teaching/03-draft-quiz-app`](https://github.com/tomschiffmann-teaching/03-draft-quiz-app):
 
-1. Terraform-Files für eine AWS-VPC mit 3 Public + 3 Private Subnets, IGW, Route Tables (in [`terraform/`](terraform/))
-2. GitHub-Actions-Workflow [`deploy.yml`](.github/workflows/deploy.yml) – läuft `terraform apply` auf Push/Merge auf `main`
-3. GitHub-Actions-Workflow [`destroy.yml`](.github/workflows/destroy.yml) – manuell triggerbar (`workflow_dispatch`) für `terraform destroy`
-4. Remote State in S3-Bucket `aravinth93-svg-tfstate`
-5. AWS-Credentials in GitHub Repository Secrets
+1. Terraform-Files für AWS-VPC mit 3 Public + 3 Private Subnets, IGW, Route Tables (in [`terraform/`](terraform/))
+2. **NEU 2026-05-06:** ECR-Repository per Terraform ([`terraform/ecr.tf`](terraform/ecr.tf)) mit Lifecycle Policy (keep last 5 images)
+3. **NEU 2026-05-06:** Outputs ([`terraform/outputs.tf`](terraform/outputs.tf)) — `ecr_repository_name` und `ecr_repository_url` werden im CI/CD ausgelesen
+4. **NEU 2026-05-06:** Next.js Quiz-App + [`Dockerfile`](Dockerfile) im Repo-Root
+5. GitHub-Actions-Workflow [`deploy.yml`](.github/workflows/deploy.yml) – `terraform apply` + ECR-Login + Docker Build/Tag/Push auf Push/Merge auf `main`
+6. GitHub-Actions-Workflow [`destroy.yml`](.github/workflows/destroy.yml) – manuell triggerbar (`workflow_dispatch`) für `terraform destroy`
+7. Remote State in S3-Bucket `aravinth93-svg-tfstate` (oder neuem Bucket nach Sandbox-Reset)
+8. AWS-Credentials in GitHub Repository Secrets
 
 ## Setup
 
@@ -94,15 +97,59 @@ terraform apply
 vpc-deplyoment/
 ├── README.md                         # diese Datei
 ├── .gitignore                        # Terraform/IDE-Ignores
+├── Dockerfile                        # Next.js multi-stage build
+├── package.json / package-lock.json  # Node-Dependencies
+├── next.config.ts / tsconfig.json    # Next.js / TS-Config
+├── postcss.config.mjs                # PostCSS für Tailwind
+├── eslint.config.mjs                 # ESLint
+├── vitest.config.ts                  # Vitest
+├── src/                              # App-Code (Next.js)
+├── public/                           # Statische Assets
 ├── terraform/
 │   ├── main.tf                       # Provider + S3-Backend
 │   ├── variables.tf                  # vpc_cidr, app_name, region
-│   └── vpc.tf                        # VPC, Subnets, IGW, Route Tables
+│   ├── vpc.tf                        # VPC, Subnets, IGW, Route Tables
+│   ├── ecr.tf                        # ECR-Repo + Lifecycle Policy
+│   └── outputs.tf                    # ecr_repository_name + _url
 └── .github/
     └── workflows/
-        ├── deploy.yml                # apply auf Push auf main
+        ├── deploy.yml                # apply + ECR-Login + Docker Build/Push
         └── destroy.yml               # manueller destroy (workflow_dispatch)
 ```
+
+## Aufgabe 2 — ECR + Docker Push (2026-05-06)
+
+### Voraussetzungen vor dem Push
+
+1. **AWS Credentials in GitHub Secrets aktualisieren** (Sandbox vergibt neue Keys):
+   - GitHub → Repo → Settings → Secrets and variables → Actions
+   - `AWS_ACCESS_KEY_ID` → Update → neuen Wert einfügen
+   - `AWS_SECRET_ACCESS_KEY` → Update → neuen Wert einfügen
+
+2. **S3-Bucket prüfen / neu anlegen** (Sandbox löscht Buckets):
+   - AWS Console → S3 → prüfen ob `aravinth93-svg-tfstate` existiert
+   - Falls nicht: `aws s3 mb s3://aravinth93-svg-tfstate --region us-east-1`
+   - Oder neuen Bucket anlegen und Namen in `terraform/main.tf` (Zeile `bucket = "..."`) eintragen
+
+### Ablauf nach `git push`
+
+GitHub Actions führt aus:
+1. Test-Job (Echo)
+2. Build-Job (Echo)
+3. Deploy-Job:
+   - `terraform init/plan/apply` → ECR-Repo `quiz-app` wird angelegt
+   - `terraform output -raw ecr_repository_name` → "quiz-app"
+   - `aws-actions/amazon-ecr-login@v2` → ECR-Login
+   - `docker build` mit zwei Tags: `latest` + Git-SHA
+   - `docker push` beide Tags ins ECR
+
+### Verifikation
+
+- AWS Console → ECR → Private registry → Repositories → `quiz-app`
+  - Lifecycle policy "Keep last 5 images" sichtbar
+  - Zwei Image-Tags: `latest` + Git-SHA
+- AWS Console → S3 → dein Bucket → `terraform.tfstate` öffnen
+  - JSON enthält unter `outputs`: `ecr_repository_name` und `ecr_repository_url`
 
 ## Quellen
 
